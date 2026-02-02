@@ -20,6 +20,11 @@ func dataSourceADUser() *schema.Resource {
 				Required:    true,
 				Description: "The user's identifier. It can be the group's GUID, SID, Distinguished Name, or SAM Account Name.",
 			},
+			"host": {
+			    Type:        schema.TypeString,
+			    Optional:    true,
+			    Description: "Domain controller to query. Overrides provider configuration.",
+			},
 			"sam_account_name": {
 				Type:        schema.TypeString,
 				Computed:    true,
@@ -189,16 +194,28 @@ func dataSourceADUser() *schema.Resource {
 	}
 }
 
-func dataSourceADUserRead(d *schema.ResourceData, meta interface{}) error {
-	userID := d.Get("user_id").(string)
-	u, err := winrmhelper.GetUserFromHost(meta.(*config.ProviderConf), userID, nil)
-	if err != nil {
-		return err
-	}
 
-	if u == nil {
-		return fmt.Errorf("No user found with user_id %q", userID)
-	}
+func dataSourceADUserRead(d *schema.ResourceData, meta interface{}) error {
+    conf := meta.(*config.ProviderConf)
+    userID := d.Get("user_id").(string)
+
+    // Host override?
+    if v, ok := d.GetOk("host"); ok {
+        host := v.(string)
+        // ProviderConf kopieren, damit wir globalen Zustand NICHT überschreiben
+        newConf := *conf
+        newConf.Settings.OverrideHost = host
+        conf = &newConf
+    }
+
+    u, err := winrmhelper.GetUserFromHost(conf, userID, nil)
+    if err != nil {
+        return err
+    }
+
+    if u == nil {
+        return fmt.Errorf("No user found with user_id %q", userID)
+    }
 	_ = d.Set("sam_account_name", u.SAMAccountName)
 	_ = d.Set("display_name", u.DisplayName)
 	_ = d.Set("principal_name", u.PrincipalName)
