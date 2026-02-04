@@ -16,11 +16,13 @@ type GroupMembership struct {
 }
 
 type GroupMember struct {
-	SamAccountName string `json:"SamAccountName"`
-	DN             string `json:"DistinguishedName"`
-	GUID           string `json:"ObjectGUID"`
-	Name           string `json:"Name"`
+    SamAccountName     string `json:"SamAccountName"`
+    DN                 string `json:"DistinguishedName"`
+    GUID               string `json:"ObjectGUID"`
+    Name               string `json:"Name"`
+    ObjectClass        string `json:"ObjectClass"` 
 }
+
 
 func groupExistsInList(g *GroupMember, memberList []*GroupMember) bool {
 	for _, item := range memberList {
@@ -49,16 +51,25 @@ func diffGroupMemberLists(expectedMembers, existingMembers []*GroupMember) ([]*G
 }
 
 func unmarshalGroupMembership(input []byte) ([]*GroupMember, error) {
-	var gm []*GroupMember
-	err := json.Unmarshal(input, &gm)
-	if err != nil {
-		return nil, err
-	}
-	if len(gm) > 0 && gm[0].GUID == "" {
-		return nil, fmt.Errorf("invalid data while unmarshalling group membership data, json doc was: %s", string(input))
-	}
-	return gm, nil
+    var gm []*GroupMember
+    err := json.Unmarshal(input, &gm)
+    if err != nil {
+        return nil, err
+    }
+    if len(gm) > 0 && gm[0].GUID == "" {
+        return nil, fmt.Errorf("invalid data while unmarshalling group membership data, json doc was: %s", string(input))
+    }
+
+    // Prüfung auf Foreign Security Principal
+    for _, member := range gm {
+        if member.ObjectClass == "foreignSecurityPrincipal" {
+            fmt.Printf("Foreign Security Principal gefunden: %s\n", member.Name)
+            // Behandlung hier, z. B. Logging oder Ignorieren
+        }
+    }
+    return gm, nil
 }
+
 
 func getMembershipList(g []*GroupMember) string {
 	out := []string{}
@@ -70,34 +81,43 @@ func getMembershipList(g []*GroupMember) string {
 }
 
 func (g *GroupMembership) getGroupMembers(conf *config.ProviderConf) ([]*GroupMember, error) {
-	cmd := fmt.Sprintf("Get-ADGroupMember -Identity %q", g.GroupGUID)
-	psOpts := CreatePSCommandOpts{
-		JSONOutput:      true,
-		ForceArray:      true,
-		ExecLocally:     conf.IsConnectionTypeLocal(),
-		PassCredentials: conf.IsPassCredentialsEnabled(),
-		Username:        conf.Settings.WinRMUsername,
-		Password:        conf.Settings.WinRMPassword,
-		Server:          conf.Settings.DomainName,
-	}
-	psCmd := NewPSCommand([]string{cmd}, psOpts)
-	result, err := psCmd.Run(conf)
-	if err != nil {
-		return nil, fmt.Errorf("while running Get-ADGroupMember: %s", err)
-	} else if result.ExitCode != 0 {
-		return nil, fmt.Errorf("command Get-ADGroupMember exited with a non-zero exit code(%d), stderr: %s, stdout: %s", result.ExitCode, result.StdErr, result.Stdout)
-	}
+    cmd := fmt.Sprintf("Get-ADGroupMember -Identity %q", g.GroupGUID)
+    psOpts := CreatePSCommandOpts{
+        JSONOutput:      true,
+        ForceArray:      true,
+        ExecLocally:     conf.IsConnectionTypeLocal(),
+        PassCredentials: conf.IsPassCredentialsEnabled(),
+        Username:        conf.Settings.WinRMUsername,
+        Password:        conf.Settings.WinRMPassword,
+        Server:          conf.Settings.DomainName,
+    }
+    psCmd := NewPSCommand([]string{cmd}, psOpts)
+    result, err := psCmd.Run(conf)
+    if err != nil {
+        return nil, fmt.Errorf("while running Get-ADGroupMember: %s", err)
+    } else if result.ExitCode != 0 {
+        return nil, fmt.Errorf("command Get-ADGroupMember exited with a non-zero exit code(%d), stderr: %s, stdout: %s", result.ExitCode, result.StdErr, result.Stdout)
+    }
 
-	if strings.TrimSpace(result.Stdout) == "" {
-		return []*GroupMember{}, nil
-	}
+    if strings.TrimSpace(result.Stdout) == "" {
+        return []*GroupMember{}, nil
+    }
 
-	gm, err := unmarshalGroupMembership([]byte(result.Stdout))
-	if err != nil {
-		return nil, fmt.Errorf("while unmarshalling group membership response: %s", err)
-	}
+    gm, err := unmarshalGroupMembership([]byte(result.Stdout))
+    if err != nil {
+        return nil, fmt.Errorf("while unmarshalling group membership response: %s", err)
+    }
 
-	return gm, nil
+    // Hier könnte eine Prüfung erfolgen, um Foreign Security Principals zu überspringen
+    var filteredMembers []*GroupMember
+    for _, member := range gm {
+        if member.ObjectClass == "foreignSecurityPrincipal" {
+            continue // Überspringe Foreign Security Principals
+        }
+        filteredMembers = append(filteredMembers, member)
+    }
+
+    return filteredMembers, nil
 }
 
 func (g *GroupMembership) bulkGroupMembersOp(conf *config.ProviderConf, operation string, members []*GroupMember) error {
