@@ -1,4 +1,4 @@
-module github.com/hashicorp/terraform-provider-ad
+module github.com/tfuchslu/terraform-provider-ad
 
 go 1.16
 
